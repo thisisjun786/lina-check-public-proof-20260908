@@ -1,0 +1,10 @@
+{
+  "targetBranch": "main",
+  "purpose": "Preserve quantity-aware totals while simplifying implementation",
+  "acceptance": [
+    {
+      "id": "quantity",
+      "description": "total([{price:10,quantity:3}]) returns 30; quantity remains part of every line total."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "requiredLenses": [
+    "development",
+    "product",
+    "documentation"
+  ],
+  "maxRepairRounds": 2,
+  "requiredChecks": [
+    {
+      "name": "ci-gate",
+      "appId": 15368,
+      "workflowPath": ".github/workflows/ci.yml"
+    },
+    {
+      "name": "lina-check-gate",
+      "appId": 15368
+    }
+  ],
+  "automatic": false,
+  "targetBranches": [],
+  "excludedPaths": [
+    ".github",
+    ".lina-check"
+  ],
+  "verifierKeys": {
+    "controller": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEADYPaCFGdmb6GsiQipdRcBNhg7OjIv7y87WkLhhJInNo=\n-----END PUBLIC KEY-----\n",
+    "independent": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAemmUfMiHl152hrwn8McUj5iQ3fgprcoD9e66V6j9ED4=\n-----END PUBLIC KEY-----\n"
+  }
+}
