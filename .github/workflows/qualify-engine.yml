@@ -1,0 +1,212 @@
+# Synthetic runtime-only qualification; never the required review gate.
+#
+# Copy to .github/workflows/lina-check.yml in the AUTHORIZED SYNTHETIC repository
+# only. See docs/workflows/README.md for what must be resolved before first use;
+# this file is a template under docs/ and is deliberately not an active workflow
+# in this repository.
+name: Engine runtime qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      subject_kind:
+        description: Review a pull request or an issue
+        type: choice
+        options: [pr, issue]
+        required: true
+      subject_number:
+        description: Pull request or issue number
+        type: string
+        required: true
+      engine_sha:
+        description: Private engine commit (40 hex) to execute
+        type: string
+        required: true
+      policy_commit:
+        description: Trusted policy commit (40 hex); for a PR this must equal its base SHA
+        type: string
+        required: true
+      publish:
+        description: Post results to the subject. Leave false to observe only.
+        type: boolean
+        default: false
+
+# Least privilege at the workflow level; the review job widens only what the
+# controller needs to collect and publish in this repository.
+permissions:
+  contents: read
+
+# One run per subject. Never cancel in flight: a cancelled run can leave a
+# claimed publication intent behind.
+concurrency:
+  group: lina-check-${{ github.repository }}-${{ inputs.subject_kind }}-${{ inputs.subject_number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  runtime-qualification:
+    # Any runner with Docker and the network reach to fetch the pinned runtime.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # The target repository token is the publishing identity: GitHub Actions is
+    # an App installation, which is what the Checks API requires. Only the
+    # controller process receives it; the sandbox launcher builds the model
+    # container environment from an allowlist holding the model key alone, so
+    # this token never reaches the container.
+    permissions:
+      contents: read
+    # Repository and ref guard. workflow_dispatch can select any ref, so a
+    # non-default branch must not accidentally run this workflow. This guard
+    # assumes trusted writers: someone allowed to change workflow files can
+    # remove it. Actor permissions remain part of the trust boundary.
+    if: >-
+      github.repository == vars.LINA_AUTHORIZED_REPOSITORY &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    env:
+      LINA_RUN_ROOT: ${{ runner.temp }}/lina-check
+      LINA_PRIVATE_LOG: ${{ runner.temp }}/lina-check/private/engine.log
+    steps:
+      - name: Validate dispatch inputs and actor
+        env:
+          ALLOWED_ACTORS: ${{ vars.LINA_ALLOWED_ACTORS }}
+          ACTOR: ${{ github.triggering_actor }}
+          SUBJECT_NUMBER: ${{ inputs.subject_number }}
+          ENGINE_SHA: ${{ inputs.engine_sha }}
+          POLICY_COMMIT: ${{ inputs.policy_commit }}
+        run: |
+          set -euo pipefail
+          # Every value below reaches a command line or a checkout, so each is
+          # shape-checked before any credential is loaded.
+          [[ "$SUBJECT_NUMBER" =~ ^[0-9]{1,9}$ ]] || { echo 'Invalid subject number'; exit 1; }
+          [[ "$ENGINE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'engine_sha must be a full 40-hex commit'; exit 1; }
+          [[ "$POLICY_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'policy_commit must be a full 40-hex commit'; exit 1; }
+          [[ -n "${ALLOWED_ACTORS:-}" ]] || { echo 'Set the LINA_ALLOWED_ACTORS variable first'; exit 1; }
+          match=0
+          for allowed in ${ALLOWED_ACTORS//,/ }; do
+            [[ "${allowed,,}" == "${ACTOR,,}" ]] && match=1
+          done
+          [[ "$match" == 1 ]] || { echo 'Actor not authorized'; exit 1; }
+          mkdir -p "$LINA_RUN_ROOT/private"
+          chmod 700 "$LINA_RUN_ROOT" "$LINA_RUN_ROOT/private"
+
+      - name: Check out the public subject repository
+        env:
+          SUBJECT_REPOSITORY: ${{ github.repository }}
+          SUBJECT_KIND: ${{ inputs.subject_kind }}
+          SUBJECT_NUMBER: ${{ inputs.subject_number }}
+        # Cloned without any credential: the subject is public and the engine
+        # reads it only as Git objects.
+        run: |
+          set -euo pipefail
+          # Dispatch values reach the shell through the environment only, never
+          # through expression interpolation inside a command line.
+          git clone --quiet --filter=blob:none "https://github.com/${SUBJECT_REPOSITORY}.git" "$LINA_RUN_ROOT/subject"
+          cd "$LINA_RUN_ROOT/subject"
+          # Reviewed content must never execute as part of this checkout. Hooks
+          # are not cloned, but the hooks path is pinned away regardless.
+          git config core.hooksPath /dev/null
+          if [[ "$SUBJECT_KIND" == 'pr' ]]; then
+            # Named local refs, never FETCH_HEAD: a second fetch overwrites it.
+            # The controller needs the PR head and its base objects present.
+            git fetch --quiet --no-tags origin \
+              "+refs/pull/${SUBJECT_NUMBER}/head:refs/lina-check/pr-head" \
+              "+refs/heads/*:refs/remotes/origin/*"
+            git checkout --quiet --detach refs/lina-check/pr-head
+            git rev-parse HEAD >/dev/null
+          fi
+
+      # Pinned to the commit `git ls-remote` resolved for tag v6. Nothing later
+      # in this job compensates for an unpinned action: it runs before every
+      # check below and with access to this job's environment.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+
+      # Compatibility guard, not a security control.
+      - name: Assert the runtime satisfies the engine
+        run: |
+          set -euo pipefail
+          major="$(node -p 'process.versions.node.split(".")[0]')"
+          # This project runs the engine on Node 24.
+          [[ "$major" -ge 24 ]] || { echo "Node 24+ required, found $major"; exit 1; }
+          docker version --format '{{.Server.Version}}' >/dev/null
+
+      - name: Fetch the private engine at the pinned commit
+        env:
+          ENGINE_DEPLOY_KEY: ${{ secrets.LINA_ENGINE_DEPLOY_KEY }}
+          ENGINE_REPOSITORY: ${{ vars.LINA_ENGINE_REPOSITORY }}
+          ENGINE_SHA: ${{ inputs.engine_sha }}
+          SSH_KNOWN_HOSTS: ${{ vars.LINA_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "${ENGINE_DEPLOY_KEY:-}" && -n "${ENGINE_REPOSITORY:-}" ]] || { echo 'Engine deploy key or repository is not configured'; exit 1; }
+          # A pinned host key is required: trust-on-first-use would accept
+          # whatever answers the first connection.
+          [[ -n "${SSH_KNOWN_HOSTS:-}" ]] || { echo 'LINA_SSH_KNOWN_HOSTS is not configured; record the published SSH host keys first'; exit 1; }
+          key="$LINA_RUN_ROOT/private/engine_key"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$ENGINE_DEPLOY_KEY" > "$key"
+          known="$LINA_RUN_ROOT/private/known_hosts"
+          install -m 600 /dev/null "$known"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known"
+          # Read-only deploy key, private engine, immutable commit. Engine clone
+          # output is private: a failure must not print repository contents.
+          git clone --quiet "git@github.com:${ENGINE_REPOSITORY}.git" "$LINA_RUN_ROOT/engine-src" >>"$LINA_PRIVATE_LOG" 2>&1
+          cd "$LINA_RUN_ROOT/engine-src"
+          git checkout --quiet "$ENGINE_SHA" >>"$LINA_PRIVATE_LOG" 2>&1
+          [[ "$(git rev-parse HEAD)" == "$ENGINE_SHA" ]] || { echo 'Engine checkout is not the pinned commit'; exit 1; }
+          rm -f "$key"
+          unset GIT_SSH_COMMAND
+
+      - name: Install engine dependencies
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          # --ignore-scripts: install must not execute package lifecycle code.
+          npm ci --ignore-scripts >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Engine dependency install failed; see private log'; exit 1; }
+
+      - name: Stage the pinned Cursor runtime
+        env:
+          CURSOR_RUNTIME_DIR: ${{ vars.LINA_CURSOR_RUNTIME_DIR }}
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          if [[ -n "${CURSOR_RUNTIME_DIR:-}" ]]; then
+            # Pre-staged runtime on a self-hosted runner stays supported.
+            [[ -d "$CURSOR_RUNTIME_DIR" ]] || { echo 'Configured Cursor runtime directory does not exist on this runner'; exit 1; }
+            echo "LINA_STAGED_RUNTIME=$CURSOR_RUNTIME_DIR" >> "$GITHUB_ENV"
+          else
+            # Otherwise acquire it from the URL pinned in
+            # deploy/lina-check/runtime-lock.json. The script verifies the archive
+            # hash before extracting and then accepts only the exact locked
+            # inventory. Its output names the staged directory; the download
+            # itself stays out of the public log.
+            staged="$(node --import tsx scripts/fetch-lina-runtime.ts "$LINA_RUN_ROOT/private/runtime" 2>>"$LINA_PRIVATE_LOG" | node -pe 'JSON.parse(require("node:fs").readFileSync(0,"utf8")).staged')" || { echo 'Pinned runtime acquisition failed; see private log'; exit 1; }
+            [[ -d "$staged" ]] || { echo 'Pinned runtime acquisition produced no staged directory'; exit 1; }
+            echo "LINA_STAGED_RUNTIME=$staged" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the sandbox images
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          # Hashes every file against the lock, then builds from the digest-pinned
+          # base image. Build output stays private.
+          node --import tsx scripts/build-lina-sandbox.ts "$LINA_STAGED_RUNTIME" >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Sandbox build failed; see private log'; exit 1; }
+
+      - name: Verify the actual isolated runtime
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          LINA_TEST_CURSOR_IMAGE="$(docker image inspect lina-check-cursor:qualification --format '{{.Id}}')" \
+          LINA_REAL_SANDBOX=1 LINA_TEST_FIXTURE_ROOT="$RUNNER_TEMP" \
+            node --import tsx --test test/lina-check-sandbox.test.ts >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Runtime qualification failed'; exit 1; }
+          echo 'Pinned private engine and isolated Docker runtime qualified. No model review or merge gate was executed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove run-owned private material
+        if: always()
+        run: |
+          find "$LINA_RUN_ROOT/private" -type f -exec shred -u {} + 2>/dev/null || true
