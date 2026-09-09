@@ -251,7 +251,7 @@ jobs:
             const list = (value) => String(value).split(",").map((item) => item.trim()).filter(Boolean);
             let verification = {};
             if (env.VERIFICATION_EVIDENCE_FILE) {
-              const root = path.resolve(env.LINA_RUN_ROOT, "engine-src");
+              const root = fs.realpathSync(path.resolve(env.LINA_RUN_ROOT, "engine-src"));
               const file = fs.realpathSync(path.resolve(root, env.VERIFICATION_EVIDENCE_FILE));
               if (!file.startsWith(root + path.sep) || fs.statSync(file).size > 16 * 1024 * 1024) throw Error("Invalid verification file");
               const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -286,7 +286,7 @@ jobs:
               publish: env.PUBLISH === "true",
               timeoutMs: 90 * 60 * 1000,
             }));
-          '
+          ' >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Controller options preparation failed'; exit 1; }
 
       - name: Run the controller
         env:
