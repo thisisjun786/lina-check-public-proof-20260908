@@ -30,6 +30,11 @@ on:
         description: Post results to the subject. Leave false to observe only.
         type: boolean
         default: false
+      verification_evidence_file:
+        description: Optional signed verification JSON in the pinned private engine checkout
+        type: string
+        required: false
+        default: ''
 
 # Least privilege at the workflow level; the review job widens only what the
 # controller needs to collect and publish in this repository.
@@ -222,6 +227,7 @@ jobs:
           STATE_PATH: ${{ vars.LINA_STATE_PATH }}
           PROVIDER_HOSTS: ${{ vars.LINA_PROVIDER_HOSTS }}
           POLICY_PATH: ${{ vars.LINA_POLICY_PATH }}
+          VERIFICATION_EVIDENCE_FILE: ${{ inputs.verification_evidence_file }}
         run: |
           set -euo pipefail
           [[ -n "${STATE_REPOSITORY:-}" && "$STATE_REPOSITORY" == */* ]] || { echo 'Set LINA_STATE_REPOSITORY to owner/repo'; exit 1; }
@@ -240,9 +246,20 @@ jobs:
           install -m 600 /dev/null "$LINA_RUN_ROOT/private/options.json"
           node -e '
             const fs = require("node:fs");
+            const path = require("node:path");
             const env = process.env;
             const list = (value) => String(value).split(",").map((item) => item.trim()).filter(Boolean);
+            let verification = {};
+            if (env.VERIFICATION_EVIDENCE_FILE) {
+              const root = path.resolve(env.LINA_RUN_ROOT, "engine-src");
+              const file = fs.realpathSync(path.resolve(root, env.VERIFICATION_EVIDENCE_FILE));
+              if (!file.startsWith(root + path.sep) || fs.statSync(file).size > 16 * 1024 * 1024) throw Error("Invalid verification file");
+              const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
+              if (!Array.isArray(evidence)) throw Error("Expected verification evidence array");
+              verification = { verificationEvidence: evidence };
+            }
             fs.writeFileSync(env.OPTIONS_PATH, JSON.stringify({
+              ...verification,
               access: {
                 repo: env.SUBJECT_REPOSITORY,
                 actor: env.ACTOR,
