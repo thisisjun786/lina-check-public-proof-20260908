@@ -1,1 +1,1 @@
-export function total(items) { return items.reduce((sum, item) => sum + item.price * item.quantity, 0); }
+export function total(items) { return items.reduce((sum, { price, quantity }) => sum + price * quantity, 0); }
