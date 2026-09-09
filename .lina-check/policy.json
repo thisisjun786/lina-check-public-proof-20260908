@@ -10,7 +10,8 @@
     {
       "name": "ci-gate",
       "appId": 15368,
-      "workflowPath": ".github/workflows/ci.yml"
+      "workflowPath": ".github/workflows/ci.yml",
+      "revisionProofJob": "revision-proof"
     },
     {
       "name": "lina-check-gate",

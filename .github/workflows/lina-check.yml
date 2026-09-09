@@ -58,6 +58,7 @@ jobs:
     # this token never reaches the container.
     permissions:
       contents: read
+      actions: read
       issues: write
       pull-requests: write
       checks: write
