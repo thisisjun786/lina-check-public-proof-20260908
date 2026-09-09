@@ -9,23 +9,34 @@ name: LINA Check
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Review or maintain repository instructions
+        type: choice
+        options: [review, guidance]
+        default: review
+      guidance_request:
+        description: Guidance JSON with candidateSha, event, registryPath and verifierId
+        type: string
+        required: false
+        default: ""
       subject_kind:
         description: Review a pull request or an issue
         type: choice
         options: [pr, issue]
-        required: true
+        default: pr
+        required: false
       subject_number:
-        description: Pull request or issue number
+        description: Pull request or issue number (review only)
         type: string
-        required: true
+        required: false
       engine_sha:
         description: Private engine commit (40 hex) to execute
         type: string
         required: true
       policy_commit:
-        description: Trusted policy commit (40 hex); for a PR this must equal its base SHA
+        description: Trusted policy commit (review only; must equal PR base SHA)
         type: string
-        required: true
+        required: false
       publish:
         description: Post results to the subject. Leave false to observe only.
         type: boolean
@@ -34,12 +45,12 @@ on:
         description: Optional signed verification JSON in the pinned private engine checkout
         type: string
         required: false
-        default: ''
+        default: ""
       verification_evidence_commit:
         description: Optional 40-hex private engine commit for the signed verification JSON; defaults to engine_sha
         type: string
         required: false
-        default: ''
+        default: ""
 
 # Least privilege at the workflow level; the review job widens only what the
 # controller needs to collect and publish in this repository.
@@ -49,7 +60,7 @@ permissions:
 # One run per subject. Never cancel in flight: a cancelled run can leave a
 # claimed publication intent behind.
 concurrency:
-  group: lina-check-${{ github.repository }}-${{ inputs.subject_kind }}-${{ inputs.subject_number }}
+  group: lina-check-${{ github.repository }}-${{ inputs.operation == 'guidance' && 'guidance' || format('{0}-{1}', inputs.subject_kind, inputs.subject_number) }}
   cancel-in-progress: false
 
 defaults:
@@ -58,6 +69,7 @@ defaults:
 
 jobs:
   review:
+    name: ${{ inputs.operation == 'guidance' && 'Guidance maintenance' || 'Review' }}
     # Any runner with Docker and the network reach to fetch the pinned runtime.
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -88,6 +100,7 @@ jobs:
           ALLOWED_ACTORS: ${{ vars.LINA_ALLOWED_ACTORS }}
           ACTOR: ${{ github.triggering_actor }}
           SUBJECT_NUMBER: ${{ inputs.subject_number }}
+          OPERATION: ${{ inputs.operation }}
           ENGINE_SHA: ${{ inputs.engine_sha }}
           POLICY_COMMIT: ${{ inputs.policy_commit }}
         run: |
@@ -97,9 +110,12 @@ jobs:
           printf '%s\n' "LINA_RUN_ROOT=$LINA_RUN_ROOT" "LINA_PRIVATE_LOG=$LINA_PRIVATE_LOG" >> "$GITHUB_ENV"
           # Every value below reaches a command line or a checkout, so each is
           # shape-checked before any credential is loaded.
-          [[ "$SUBJECT_NUMBER" =~ ^[0-9]{1,9}$ ]] || { echo 'Invalid subject number'; exit 1; }
+          [[ "${OPERATION:-review}" == review || "$OPERATION" == guidance ]] || { echo 'Invalid operation'; exit 1; }
+          if [[ "${OPERATION:-review}" == review ]]; then
+            [[ "$SUBJECT_NUMBER" =~ ^[0-9]{1,9}$ ]] || { echo 'Invalid subject number'; exit 1; }
+            [[ "$POLICY_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'policy_commit must be a full 40-hex commit'; exit 1; }
+          fi
           [[ "$ENGINE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'engine_sha must be a full 40-hex commit'; exit 1; }
-          [[ "$POLICY_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'policy_commit must be a full 40-hex commit'; exit 1; }
           [[ -n "${ALLOWED_ACTORS:-}" ]] || { echo 'Set the LINA_ALLOWED_ACTORS variable first'; exit 1; }
           match=0
           for allowed in ${ALLOWED_ACTORS//,/ }; do
@@ -111,6 +127,8 @@ jobs:
 
       - name: Check out the public subject repository
         env:
+          OPERATION: ${{ inputs.operation }}
+          GUIDANCE_REQUEST: ${{ inputs.guidance_request }}
           SUBJECT_REPOSITORY: ${{ github.repository }}
           SUBJECT_KIND: ${{ inputs.subject_kind }}
           SUBJECT_NUMBER: ${{ inputs.subject_number }}
@@ -125,7 +143,11 @@ jobs:
           # Reviewed content must never execute as part of this checkout. Hooks
           # are not cloned, but the hooks path is pinned away regardless.
           git config core.hooksPath /dev/null
-          if [[ "$SUBJECT_KIND" == 'pr' ]]; then
+          if [[ "${OPERATION:-review}" == guidance ]]; then
+            candidate="$(node -e 'try { const r=JSON.parse(process.env.GUIDANCE_REQUEST); if (!/^[a-f0-9]{40}$/.test(r.candidateSha)) process.exit(1); process.stdout.write(r.candidateSha); } catch { process.exit(1); }')" || { echo 'Invalid guidance candidate'; exit 1; }
+            git fetch --quiet --no-tags origin "$candidate"
+            git checkout --quiet --detach "$candidate"
+          elif [[ "$SUBJECT_KIND" == 'pr' ]]; then
             # Named local refs, never FETCH_HEAD: a second fetch overwrites it.
             # The controller needs the PR head and its base objects present.
             git fetch --quiet --no-tags origin \
@@ -140,7 +162,7 @@ jobs:
       # check below and with access to this job's environment.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '24'
+          node-version: "24"
 
       # Compatibility guard, not a security control.
       - name: Assert the runtime satisfies the engine
@@ -229,6 +251,7 @@ jobs:
           node --import tsx scripts/build-lina-sandbox.ts "$LINA_STAGED_RUNTIME" >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Sandbox build failed; see private log'; exit 1; }
 
       - name: Compose trusted controller options
+        if: inputs.operation != 'guidance'
         env:
           OPTIONS_PATH: ${{ runner.temp }}/lina-check/private/options.json
           SUBJECT_REPOSITORY: ${{ github.repository }}
@@ -318,8 +341,9 @@ jobs:
           ' >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Controller options preparation failed'; exit 1; }
 
       - name: Run the controller
+        if: inputs.operation != 'guidance'
         env:
-          # Collection and publication both use this repository's Actions token,
+          # Review collection and publication use this repository's Actions token,
           # scoped by the job permissions above. Credentials stay in this step
           # and none of them is mounted into the model sandbox.
           LINA_GITHUB_TOKEN: ${{ github.token }}
@@ -341,6 +365,24 @@ jobs:
           set -e
           [[ "$status" == 0 ]] || { echo 'Controller finished incomplete or holding'; exit "$status"; }
 
+      - name: Run registered guidance maintenance
+        if: inputs.operation == 'guidance'
+        env:
+          # Same account identity for every guidance CLI and private-state call.
+          # Job permissions constrain github.token, not this explicitly authorized PAT.
+          LINA_GITHUB_TOKEN: ${{ secrets.LINA_STATE_TOKEN }}
+          LINA_GUIDANCE_VERIFIER_PRIVATE_KEY: ${{ secrets.LINA_GUIDANCE_VERIFIER_PRIVATE_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          LINA_GUIDANCE_REQUEST: ${{ inputs.guidance_request }}
+          LINA_GUIDANCE_PUBLISH: ${{ inputs.publish }}
+          LINA_GUIDANCE_WORKSPACE: ${{ runner.temp }}/lina-check/subject
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          export LINA_CURSOR_IMAGE="$(docker image inspect --format '{{.Id}}' lina-check-cursor:qualification)"
+          export LINA_PROXY_IMAGE="$(docker image inspect --format '{{.Id}}' lina-check-proxy:qualification)"
+          node --import tsx scripts/lina-check-guidance-dispatch.ts 2>>"$LINA_PRIVATE_LOG"
+
       - name: Remove run-owned private material
         if: always()
         run: |
@@ -348,3 +390,6 @@ jobs:
           # Nothing here is ever uploaded as an artifact; this only shortens the
           # window on a self-hosted runner whose disk outlives the job.
           find "$LINA_RUN_ROOT/private" -type f -exec shred -u {} + 2>/dev/null || true
+          if [[ -n "${LINA_GUIDANCE_ROOT:-}" && "$LINA_GUIDANCE_ROOT" == "$HOME"/.lina-guidance-* ]]; then
+            find "$LINA_GUIDANCE_ROOT" -type f -exec shred -u {} + 2>/dev/null || true
+          fi
