@@ -1,9 +1,14 @@
 # Agent guidance
 
-This repository is a synthetic LINA Check proof fixture.
+## Verified commands
+- `node --test total.test.js` — README and Fixture CI acceptance (`.github/workflows/ci.yml`).
 
-Cart `total` is quantity-aware: each line contributes `price * quantity`. Example acceptance: `total([{price:10,quantity:3}])` returns `30`.
+## Paths
+- `total.test.js` — exercised by Fixture CI and README.
+- `.lina-check/acceptance/1.json` — quantity-aware line totals: `total([{price:10,quantity:3}])` returns 30; quantity remains part of every line total.
+- `.lina-check/policy.json` — trusted executable policy (`automatic`: false; requiredChecks pin `ci-gate` to `.github/workflows/ci.yml`).
+- `POLICY.md` — trusted main owns `.lina-check/policy.json` and `.lina-check/acceptance/`; review is advisory until the rules gate verifies evidence; no automatic merge, protection modification, or release.
+- `.github/workflows/lina-check.yml` — `publish` input defaults to false (observe only).
 
-Run tests with `node --test total.test.js` (same command as README and Fixture CI).
-
-Trusted main owns `.lina-check/policy.json` and `.lina-check/acceptance/`. Review output is advisory until the rules gate verifies evidence. No automatic merge, protection modification, or release (`automatic` is false). Required ci-gate workflow: `.github/workflows/ci.yml`.
+## Intentional gates
+- `ci-gate` in `.github/workflows/ci.yml` passes only when acceptance job `RESULT` is `success`.
