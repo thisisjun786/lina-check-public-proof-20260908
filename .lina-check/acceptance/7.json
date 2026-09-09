@@ -1,0 +1,22 @@
+{
+  "targetBranch": "oracle-fixture-base-20260909",
+  "purpose": "Provide a small command-line interface for existing quantity-aware totals, with documented defaults and validation. This synthetic fixture qualifies code, product and documentation review plus Oracle evidence; it is not a production rollout.",
+  "acceptance": [
+    {
+      "id": "library",
+      "description": "The existing total API keeps quantity-aware behavior: total([{price:10,quantity:3}]) returns 30."
+    },
+    {
+      "id": "cli",
+      "description": "node total-cli.js --price 10 returns 10 by default; --price 10 --quantity 3 returns 30; --price 10 --quantity 0 returns 0."
+    },
+    {
+      "id": "invalid-input",
+      "description": "Missing price, repeated or unknown flags, negative values and nonnumeric values produce exit code 2 rather than a total."
+    },
+    {
+      "id": "documentation",
+      "description": "README documents the CLI command, the default quantity of one, preservation of explicit zero, and invalid-input behavior."
+    }
+  ]
+}

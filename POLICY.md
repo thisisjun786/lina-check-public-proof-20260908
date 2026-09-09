@@ -1,3 +1,3 @@
-# Synthetic qualification policy
+# Synthetic Oracle qualification policy
 
-The trusted main branch owns `.lina-check/policy.json` and `.lina-check/acceptance/`. Review output is advisory until the rules gate verifies evidence. No automatic merge, protection modification, or release is enabled.
+The selected trusted target branch owns `.lina-check/policy.json` and `.lina-check/acceptance/`. Three independent review roles and their evidence must complete before the required Oracle advisory review. Independent verification of Oracle findings precedes the rules gate. No automatic merge, protection modification, or release is enabled.
