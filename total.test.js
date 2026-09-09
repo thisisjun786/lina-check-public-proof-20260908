@@ -43,3 +43,19 @@ test('CLI rejects overflowing operands and totals without printing Infinity', ()
   assert.equal(finite.status, 0);
   assert.equal(finite.stdout.trim(), '0');
 });
+
+
+test('CLI output remains a plain numeric line when color is forced', () => {
+  const env = { ...process.env, FORCE_COLOR: '1' };
+  delete env.NO_COLOR;
+  for (const [args, expected] of [
+    [['--price', '10'], '10\n'],
+    [['--price', '10', '--quantity', '0'], '0\n'],
+  ]) {
+    const result = spawnSync(process.execPath, ['total-cli.js', ...args], { encoding: 'utf8', env });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, expected);
+    assert.equal(result.stderr, '');
+    assert.equal(Number.isFinite(Number(result.stdout)), true);
+  }
+});

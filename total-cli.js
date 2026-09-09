@@ -22,5 +22,5 @@ if (!Number.isFinite(result)) {
   process.stderr.write('Usage: node total-cli.js --price NUMBER [--quantity NUMBER]\n');
   process.exitCode = 2;
 } else {
-  console.log(result);
+  process.stdout.write(String(result) + '\n');
 }
