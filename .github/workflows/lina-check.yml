@@ -138,7 +138,8 @@ jobs:
           set -euo pipefail
           # Dispatch values reach the shell through the environment only, never
           # through expression interpolation inside a command line.
-          git clone --quiet --filter=blob:none "https://github.com/${SUBJECT_REPOSITORY}.git" "$LINA_RUN_ROOT/subject"
+          # Candidate materialization re-clones this checkout offline; all Git objects must exist.
+          git clone --quiet "https://github.com/${SUBJECT_REPOSITORY}.git" "$LINA_RUN_ROOT/subject"
           cd "$LINA_RUN_ROOT/subject"
           # Reviewed content must never execute as part of this checkout. Hooks
           # are not cloned, but the hooks path is pinned away regardless.
