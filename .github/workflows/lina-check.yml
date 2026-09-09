@@ -35,6 +35,11 @@ on:
         type: string
         required: false
         default: ''
+      verification_evidence_commit:
+        description: Optional 40-hex private engine commit for the signed verification JSON; defaults to engine_sha
+        type: string
+        required: false
+        default: ''
 
 # Least privilege at the workflow level; the review job widens only what the
 # controller needs to collect and publish in this repository.
@@ -73,7 +78,10 @@ jobs:
     # remove it. Actor permissions remain part of the trust boundary.
     if: >-
       github.repository == vars.LINA_AUTHORIZED_REPOSITORY &&
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      (
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+        (vars.LINA_WORKFLOW_REF != '' && github.ref == format('refs/heads/{0}', vars.LINA_WORKFLOW_REF))
+      )
     steps:
       - name: Validate dispatch inputs and actor
         env:
@@ -149,6 +157,8 @@ jobs:
           ENGINE_REPOSITORY: ${{ vars.LINA_ENGINE_REPOSITORY }}
           ENGINE_SHA: ${{ inputs.engine_sha }}
           SSH_KNOWN_HOSTS: ${{ vars.LINA_SSH_KNOWN_HOSTS }}
+          VERIFICATION_EVIDENCE_FILE: ${{ inputs.verification_evidence_file }}
+          VERIFICATION_EVIDENCE_COMMIT: ${{ inputs.verification_evidence_commit }}
         run: |
           set -euo pipefail
           [[ -n "${ENGINE_DEPLOY_KEY:-}" && -n "${ENGINE_REPOSITORY:-}" ]] || { echo 'Engine deploy key or repository is not configured'; exit 1; }
@@ -168,6 +178,17 @@ jobs:
           cd "$LINA_RUN_ROOT/engine-src"
           git checkout --quiet "$ENGINE_SHA" >>"$LINA_PRIVATE_LOG" 2>&1
           [[ "$(git rev-parse HEAD)" == "$ENGINE_SHA" ]] || { echo 'Engine checkout is not the pinned commit'; exit 1; }
+          if [[ -n "${VERIFICATION_EVIDENCE_COMMIT:-}" && "$VERIFICATION_EVIDENCE_COMMIT" != "$ENGINE_SHA" ]]; then
+            [[ "$VERIFICATION_EVIDENCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'verification_evidence_commit must be a full 40-hex commit'; exit 1; }
+            [[ -n "${VERIFICATION_EVIDENCE_FILE:-}" ]] || { echo 'verification_evidence_file is required with verification_evidence_commit'; exit 1; }
+            [[ "$VERIFICATION_EVIDENCE_FILE" != /* && "$VERIFICATION_EVIDENCE_FILE" != *..* ]] || { echo 'Invalid verification file'; exit 1; }
+            git fetch --quiet origin "$VERIFICATION_EVIDENCE_COMMIT" >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Verification evidence commit was not available'; exit 1; }
+            [[ "$(git rev-parse --verify "$VERIFICATION_EVIDENCE_COMMIT^{commit}")" == "$VERIFICATION_EVIDENCE_COMMIT" ]] || { echo 'Verification evidence commit was not available'; exit 1; }
+            install -m 600 /dev/null "$LINA_RUN_ROOT/private/evidence.json"
+            git show "$VERIFICATION_EVIDENCE_COMMIT:$VERIFICATION_EVIDENCE_FILE" >"$LINA_RUN_ROOT/private/evidence.json" 2>>"$LINA_PRIVATE_LOG" || { echo 'Verification evidence was not available'; exit 1; }
+            size="$(wc -c < "$LINA_RUN_ROOT/private/evidence.json")"
+            [[ "$size" -gt 0 && "$size" -le 16777216 ]] || { echo 'Invalid verification file'; exit 1; }
+          fi
           rm -f "$key"
           unset GIT_SSH_COMMAND
 
@@ -228,6 +249,7 @@ jobs:
           PROVIDER_HOSTS: ${{ vars.LINA_PROVIDER_HOSTS }}
           POLICY_PATH: ${{ vars.LINA_POLICY_PATH }}
           VERIFICATION_EVIDENCE_FILE: ${{ inputs.verification_evidence_file }}
+          VERIFICATION_EVIDENCE_COMMIT: ${{ inputs.verification_evidence_commit }}
         run: |
           set -euo pipefail
           [[ -n "${STATE_REPOSITORY:-}" && "$STATE_REPOSITORY" == */* ]] || { echo 'Set LINA_STATE_REPOSITORY to owner/repo'; exit 1; }
@@ -251,9 +273,16 @@ jobs:
             const list = (value) => String(value).split(",").map((item) => item.trim()).filter(Boolean);
             let verification = {};
             if (env.VERIFICATION_EVIDENCE_FILE) {
-              const root = fs.realpathSync(path.resolve(env.LINA_RUN_ROOT, "engine-src"));
-              const file = fs.realpathSync(path.resolve(root, env.VERIFICATION_EVIDENCE_FILE));
-              if (!file.startsWith(root + path.sep) || fs.statSync(file).size > 16 * 1024 * 1024) throw Error("Invalid verification file");
+              const staged = path.resolve(env.LINA_RUN_ROOT, "private/evidence.json");
+              const file = env.VERIFICATION_EVIDENCE_COMMIT && env.VERIFICATION_EVIDENCE_COMMIT !== env.ENGINE_SHA
+                ? staged
+                : (() => {
+                    const root = fs.realpathSync(path.resolve(env.LINA_RUN_ROOT, "engine-src"));
+                    const resolved = fs.realpathSync(path.resolve(root, env.VERIFICATION_EVIDENCE_FILE));
+                    if (!resolved.startsWith(root + path.sep) || fs.statSync(resolved).size > 16 * 1024 * 1024) throw Error("Invalid verification file");
+                    return resolved;
+                  })();
+              if (fs.statSync(file).size > 16 * 1024 * 1024) throw Error("Invalid verification file");
               const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
               if (!Array.isArray(evidence)) throw Error("Expected verification evidence array");
               verification = { verificationEvidence: evidence };
