@@ -1,9 +1,6 @@
-# LINA Check — trusted workflow template (observe only).
-#
-# Copy to .github/workflows/lina-check.yml in the AUTHORIZED SYNTHETIC repository
-# only. See docs/workflows/README.md for what must be resolved before first use;
-# this file is a template under docs/ and is deliberately not an active workflow
-# in this repository.
+# LINA Check synthetic observation workflow.
+# Active only on workflow_dispatch in this authorized public proof repository.
+# Reviews publish advisory evidence; automatic merge and protection changes are disabled.
 name: LINA Check
 
 on:
