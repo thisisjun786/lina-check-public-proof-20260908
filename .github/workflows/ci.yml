@@ -1,3 +1,4 @@
+# Provides CI evidence; merge enforcement is documented in POLICY.md.
 name: Fixture CI
 on:
   pull_request:
