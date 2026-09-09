@@ -28,3 +28,18 @@ test('CLI rejects missing, repeated, unknown and invalid inputs', () => {
     assert.match(result.stderr, /^Usage:/);
   }
 });
+test('CLI rejects overflowing operands and totals without printing Infinity', () => {
+  for (const args of [
+    ['--price', '9'.repeat(309)],
+    ['--price', '9'.repeat(308), '--quantity', '2'],
+    ['--price', '9'.repeat(300), '--quantity', '9'.repeat(300)],
+  ]) {
+    const result = cli(...args);
+    assert.equal(result.status, 2);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /^Usage:/);
+  }
+  const finite = cli('--price', '9'.repeat(308), '--quantity', '0');
+  assert.equal(finite.status, 0);
+  assert.equal(finite.stdout.trim(), '0');
+});

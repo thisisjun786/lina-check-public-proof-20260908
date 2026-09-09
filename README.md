@@ -18,4 +18,6 @@ uses one; explicitly passing zero preserves zero.
 Use nonnegative decimal numbers for `--price` and `--quantity`. The price is
 required. Missing values, repeated or unknown flags, negative numbers, and
 nonnumeric values print a `Usage:` line to stderr and exit with code `2`.
+Inputs or calculated totals that exceed JavaScript's finite number range also
+exit with code `2`; they do not print `Infinity` as a successful total.
 Successful commands print the total to stdout and exit with code `0`.

@@ -17,9 +17,10 @@ function parseArgs(args) {
 }
 
 const item = parseArgs(process.argv.slice(2));
-if (!item) {
+const result = item ? total([item]) : undefined;
+if (!Number.isFinite(result)) {
   process.stderr.write('Usage: node total-cli.js --price NUMBER [--quantity NUMBER]\n');
   process.exitCode = 2;
 } else {
-  console.log(total([item]));
+  console.log(result);
 }
