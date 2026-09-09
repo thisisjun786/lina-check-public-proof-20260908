@@ -251,6 +251,28 @@ jobs:
           # base image. Build output stays private.
           node --import tsx scripts/build-lina-sandbox.ts "$LINA_STAGED_RUNTIME" >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Sandbox build failed; see private log'; exit 1; }
 
+      - name: Inspect pinned verification image references
+        if: inputs.operation == 'guidance'
+        run: |
+          set -euo pipefail
+          cd "$LINA_RUN_ROOT/engine-src/engine"
+          docker info --format 'Docker store: {{.Driver}} {{json .DriverStatus}}'
+          reference="$(node -p 'JSON.parse(require("node:fs").readFileSync("deploy/lina-check/runtime-lock.json", "utf8")).baseImage')"
+          [[ "$reference" =~ ^node@sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid verifier image pin'; exit 1; }
+          digest="${reference#node@}"
+          if docker image inspect "$digest" >/dev/null 2>&1; then
+            echo 'Legacy bare verifier digest: available'
+          else
+            echo 'Legacy bare verifier digest: unavailable'
+          fi
+          docker pull "$reference" >>"$LINA_PRIVATE_LOG" 2>&1 || { echo 'Pinned verifier image acquisition failed'; exit 1; }
+          docker image inspect "$reference" --format 'Named verifier image: {{.Id}} {{json .RepoDigests}}'
+          if docker image inspect "$digest" >/dev/null 2>&1; then
+            echo 'Legacy bare verifier digest after pull: available'
+          else
+            echo 'Legacy bare verifier digest after pull: unavailable'
+          fi
+
       - name: Compose trusted controller options
         if: inputs.operation != 'guidance'
         env:
