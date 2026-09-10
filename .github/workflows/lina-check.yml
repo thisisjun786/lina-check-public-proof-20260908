@@ -349,6 +349,8 @@ jobs:
               runId: Number(env.RUN_ID),
               runAttempt: Number(env.RUN_ATTEMPT),
               engineRevision: env.ENGINE_SHA,
+              // Keep Oracle context identical across local and hosted qualification.
+              oracleRelatedPaths: ["README.md", "total.js", "total.test.js", "package.json"],
               stateLocation: {
                 owner: env.STATE_REPOSITORY.split("/")[0],
                 repo: env.STATE_REPOSITORY.split("/")[1],
